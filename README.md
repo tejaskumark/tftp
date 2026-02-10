@@ -1,3 +1,4 @@
+Credit to https://github.com/pin/tftp
 TFTP server and client library for Golang
 =========================================
 
