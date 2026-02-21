@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"time"
@@ -50,6 +51,7 @@ type sender struct {
 	startTime      time.Time
 	datagramsSent  int
 	datagramsAcked int
+	connected      bool
 }
 
 func (s *sender) RemoteAddr() net.UDPAddr { return *s.addr }
@@ -98,7 +100,9 @@ func (s *sender) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		err = s.sendOptions()
 		if err != nil {
-			s.abort(err)
+			if err := s.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return 0, err
 		}
 	}
@@ -115,7 +119,9 @@ func (s *sender) ReadFrom(r io.Reader) (n int64, err error) {
 				binary.BigEndian.PutUint16(s.send[2:4], s.block)
 				_, err = s.sendWithRetry(4)
 				if err != nil {
-					s.abort(err)
+					if err := s.abort(err); err != nil {
+						log.Printf("Error aborting conn: %s", err)
+					}
 					return n, err
 				}
 				if s.hook != nil {
@@ -123,13 +129,17 @@ func (s *sender) ReadFrom(r io.Reader) (n int64, err error) {
 				}
 				return n, nil
 			}
-			s.abort(err)
+			if err := s.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return n, err
 		}
 		binary.BigEndian.PutUint16(s.send[2:4], s.block)
 		_, err = s.sendWithRetry(4 + l)
 		if err != nil {
-			s.abort(err)
+			if err := s.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return n, err
 		}
 		if l < len(s.send)-4 {
@@ -210,7 +220,11 @@ func (s *sender) sendDatagram(l int) (*net.UDPAddr, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = s.conn.sendTo(s.send[:l], s.addr)
+	if s.connected {
+		err = s.conn.send(s.send[:l])
+	} else {
+		err = s.conn.sendTo(s.send[:l], s.addr)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +255,9 @@ func (s *sender) sendDatagram(l int) (*net.UDPAddr, error) {
 				continue
 			}
 			if err != nil {
-				s.abort(err)
+				if err := s.abort(err); err != nil {
+					log.Printf("Error aborting conn: %s", err)
+				}
 				return addr, err
 			}
 			for name, value := range opts {
@@ -288,9 +304,9 @@ func (s *sender) abort(err error) error {
 		s.hook.OnFailure(s.buildTransferStats(), err)
 	}
 	n := packERROR(s.send, 1, err.Error())
-	err = s.conn.sendTo(s.send[:n], s.addr)
-	if err != nil {
-		return err
+	if s.connected {
+		return s.conn.send(s.send[:n])
+	} else {
+		return s.conn.sendTo(s.send[:n], s.addr)
 	}
-	return nil
 }

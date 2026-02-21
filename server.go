@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -17,7 +18,8 @@ import (
 // In case nil is provided for read or write handler the respective
 // operation is disabled.
 func NewServer(readHandler func(filename string, rf io.ReaderFrom) error,
-	writeHandler func(filename string, wt io.WriterTo) error) *Server {
+	writeHandler func(filename string, wt io.WriterTo) error,
+) *Server {
 	s := &Server{
 		mu:                &sync.Mutex{},
 		timeout:           defaultTimeout,
@@ -64,6 +66,7 @@ type Server struct {
 	packetReadTimeout time.Duration
 	cancel            context.Context
 	cancelFn          context.CancelFunc
+	dscp              int
 }
 
 // TransferStats contains details about a single TFTP transfer
@@ -138,6 +141,18 @@ func (s *Server) SetTimeout(t time.Duration) {
 		s.timeout = defaultTimeout
 	} else {
 		s.timeout = t
+	}
+}
+
+// Patch to set DSCP on the UDP connection used by the server.
+// This is a no-op on platforms where we don't have a way to set DSCP.
+func (s *Server) SetDSCP(dscp int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dscp >= 0 && dscp <= 63 {
+		s.dscp = dscp
+	} else {
+		log.Printf("Invalid DSCP value %d, must be between 0 and 63 inclusive", dscp)
 	}
 }
 
@@ -329,13 +344,18 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if localAddr == nil || localAddr.IsUnspecified() {
+		// Fallback: Get the IP this specific listener is bound to
+		if saddr, ok := s.conn.LocalAddr().(*net.UDPAddr); ok {
+			localAddr = saddr.IP
+		}
+	}
 	// Cope with packets received on the broadcast address
 	// We can't use this address as the source address in responses
 	// so fallback to the OS default.
 	if localAddr.Equal(net.IPv4bcast) {
 		localAddr = net.IPv4zero
 	}
-
 	// handlePacket is always called with maxBlockLen = blockLength (above, in processRequest).
 	// As a result, the block size would always be capped at 512 bytes, even when the tftp
 	// client indicated to use a larger value.  So override that value.  And make sure to
@@ -383,23 +403,30 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 			}
 			wt.singlePort = true
 		} else {
-			conn, err := net.ListenUDP("udp", listenAddr)
-			if err != nil {
+			var onc connConnection
+			onc.osconn = &osConn{}
+			if err := onc.getUDPConn(&wt.connected, listenAddr, remoteAddr, s.dscp); err != nil {
 				return err
 			}
-			wt.conn = &connConnection{conn: conn}
+			wt.conn = &onc
 		}
 		s.wg.Add(1)
 		go func() {
 			if s.writeHandler != nil {
 				err := s.writeHandler(filename, wt)
 				if err != nil {
-					wt.abort(err)
+					if err = wt.abort(err); err != nil {
+						log.Printf("Error aborting conn: %s", err)
+					}
 				} else {
-					wt.terminate()
+					if err = wt.terminate(); err != nil {
+						log.Printf("Error termianting conn: %s", err)
+					}
 				}
 			} else {
-				wt.abort(fmt.Errorf("server does not support write requests"))
+				if err = wt.abort(fmt.Errorf("server does not support write requests")); err != nil {
+					log.Printf("Error aborting conn: %s", err)
+				}
 			}
 			s.wg.Done()
 		}()
@@ -408,7 +435,7 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 		if err != nil {
 			return fmt.Errorf("unpack RRQ: %v", err)
 		}
-		//fmt.Printf("got RRQ (filename=%s, mode=%s, opts=%v)\n", filename, mode, opts)
+		// fmt.Printf("got RRQ (filename=%s, mode=%s, opts=%v)\n", filename, mode, opts)
 		rf := &sender{
 			send:        make([]byte, datagramLength),
 			sendA:       senderAnticipate{enabled: false},
@@ -435,11 +462,12 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 				timeout: s.timeout,
 			}
 		} else {
-			conn, err := net.ListenUDP("udp", listenAddr)
-			if err != nil {
+			var onc connConnection
+			onc.osconn = &osConn{}
+			if err := onc.getUDPConn(&rf.connected, listenAddr, remoteAddr, s.dscp); err != nil {
 				return err
 			}
-			rf.conn = &connConnection{conn: conn}
+			rf.conn = &onc
 		}
 		if s.sendAEnable { /* senderAnticipate if enabled in server */
 			rf.sendA.enabled = true /* pass enable from server to sender */
@@ -448,12 +476,16 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 		s.wg.Add(1)
 		go func(rh func(string, io.ReaderFrom) error, rf *sender, wg *sync.WaitGroup) {
 			if s.readHandler != nil {
-				err := s.readHandler(filename, rf)
+				err = s.readHandler(filename, rf)
 				if err != nil {
-					rf.abort(err)
+					if err = rf.abort(err); err != nil {
+						log.Printf("Error aborting conn: %s", err)
+					}
 				}
 			} else {
-				rf.abort(fmt.Errorf("server does not support read requests"))
+				if err = rf.abort(fmt.Errorf("server does not support read requests")); err != nil {
+					log.Printf("Error aborting conn: %s", err)
+				}
 			}
 			s.wg.Done()
 		}(s.readHandler, rf, s.wg)

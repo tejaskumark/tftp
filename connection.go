@@ -2,6 +2,7 @@ package tftp
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -26,13 +27,15 @@ func (t *connectionError) Temporary() bool {
 
 type connection interface {
 	sendTo([]byte, *net.UDPAddr) error
+	send([]byte) error
 	readFrom([]byte) (int, *net.UDPAddr, error)
 	setDeadline(time.Duration) error
 	close()
 }
 
 type connConnection struct {
-	conn *net.UDPConn
+	conn   *net.UDPConn
+	osconn *osConn
 }
 
 type chanConnection struct {
@@ -61,6 +64,18 @@ func (c *chanConnection) sendTo(data []byte, addr *net.UDPAddr) error {
 		_, err = c.server.conn.WriteTo(data, addr)
 	}
 	return err
+}
+
+func (c *connConnection) send(data []byte) error {
+	// The OS knows the Local IP and Remote IP because we used DialUDP
+	_, err := c.conn.Write(data)
+	return err
+}
+
+// For channel-based connections (Used in Single Port mode)
+func (c *chanConnection) send(data []byte) error {
+	// For single port, send is essentially sendTo with the existing remote address
+	return c.sendTo(data, c.addr)
 }
 
 func (c *chanConnection) readFrom(buffer []byte) (int, *net.UDPAddr, error) {
@@ -108,5 +123,10 @@ func (c *connConnection) setDeadline(deadline time.Duration) error {
 }
 
 func (c *connConnection) close() {
-	c.conn.Close()
+	if err := c.conn.Close(); err != nil {
+		log.Printf("Error closing connection: %v", err)
+	}
+	if err := c.unsetDSCPValue(); err != nil {
+		log.Printf("Error unsetting DSCP value: %v", err)
+	}
 }

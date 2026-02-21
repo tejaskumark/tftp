@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"net"
 )
 
@@ -16,8 +17,10 @@ type senderAnticipate struct {
 	sendslens []uint   /* data lens in buffers */
 }
 
-const anticipateWindowDefMax = 60 /* 60 by 512 is about 30k */
-const anticipateDebug bool = false
+const (
+	anticipateWindowDefMax      = 60 /* 60 by 512 is about 30k */
+	anticipateDebug        bool = false
+)
 
 func sendAInit(sA *senderAnticipate, ln uint, winSz uint) {
 	var ksz uint
@@ -78,7 +81,9 @@ func readFromAnticipate(s *sender, r io.Reader) (n int64, err error) {
 			knum = k + 1
 		}
 		if !kfillOk {
-			s.abort(err)
+			if err := s.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return n, err
 		}
 		s.sendA.num = knum
@@ -92,7 +97,9 @@ func readFromAnticipate(s *sender, r io.Reader) (n int64, err error) {
 		}
 		_, err = s.sendWithRetryAnticipate()
 		if err != nil {
-			s.abort(err)
+			if err := s.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return n, err
 		}
 		if kfillPartial {
@@ -180,7 +187,9 @@ func (s *sender) sendDatagramAnticipate() (*net.UDPAddr, error) {
 				continue
 			}
 			if err != nil {
-				s.abort(err)
+				if err := s.abort(err); err != nil {
+					log.Printf("Error aborting conn: %s", err)
+				}
 				return addr, err
 			}
 			for name, value := range opts {

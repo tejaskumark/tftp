@@ -1,6 +1,7 @@
 package tftp
 
 import (
+	"log"
 	"net"
 	"time"
 )
@@ -17,7 +18,9 @@ func (s *Server) singlePortProcessRequests() error {
 		if shuttingDown {
 			// s.getPacket will wait for an incoming packet for a second, When nothing
 			// comes, it will exit with error which will complete the server shutdown.
-			s.conn.SetReadDeadline(time.Now().Add(time.Second))
+			if err := s.conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				log.Printf("error setting readdeadline: %s", err)
+			}
 		}
 
 		buf := make([]byte, s.maxBlockLen+4)

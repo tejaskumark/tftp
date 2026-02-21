@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"time"
@@ -62,6 +63,7 @@ type receiver struct {
 	startTime      time.Time
 	datagramsSent  int
 	datagramsAcked int
+	connected      bool
 }
 
 func (r *receiver) WriteTo(w io.Writer) (n int64, err error) {
@@ -71,7 +73,9 @@ func (r *receiver) WriteTo(w io.Writer) (n int64, err error) {
 	if r.opts != nil {
 		err := r.sendOptions()
 		if err != nil {
-			r.abort(err)
+			if err := r.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return 0, err
 		}
 	}
@@ -81,12 +85,16 @@ func (r *receiver) WriteTo(w io.Writer) (n int64, err error) {
 			l, err := w.Write(r.receive[4:r.l])
 			n += int64(l)
 			if err != nil {
-				r.abort(err)
+				if err := r.abort(err); err != nil {
+					log.Printf("Error aborting conn: %s", err)
+				}
 				return n, err
 			}
 			if r.l < len(r.receive) {
 				if r.autoTerm {
-					r.terminate()
+					if err := r.terminate(); err != nil {
+						log.Printf("Error terminating conn: %s", err)
+					}
 				}
 				return n, nil
 			}
@@ -95,7 +103,9 @@ func (r *receiver) WriteTo(w io.Writer) (n int64, err error) {
 		r.block++ // send ACK for current block and expect next one
 		ll, _, err := r.receiveWithRetry(4)
 		if err != nil {
-			r.abort(err)
+			if err := r.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return n, err
 		}
 		r.l = ll
@@ -119,7 +129,9 @@ func (r *receiver) sendOptions() error {
 		r.block = 1 // expect data block number 1
 		ll, _, err := r.receiveWithRetry(m)
 		if err != nil {
-			r.abort(err)
+			if err := r.abort(err); err != nil {
+				log.Printf("Error aborting conn: %s", err)
+			}
 			return err
 		}
 		r.l = ll
@@ -163,7 +175,11 @@ func (r *receiver) receiveDatagram(l int) (int, *net.UDPAddr, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	err = r.conn.sendTo(r.send[:l], r.addr)
+	if r.connected {
+		err = r.conn.send(r.send[:l])
+	} else {
+		err = r.conn.sendTo(r.send[:l], r.addr)
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -193,7 +209,9 @@ func (r *receiver) receiveDatagram(l int) (int, *net.UDPAddr, error) {
 				continue
 			}
 			if err != nil {
-				r.abort(err)
+				if err := r.abort(err); err != nil {
+					log.Printf("Error aborting conn: %s", err)
+				}
 				return 0, addr, err
 			}
 			for name, value := range opts {
@@ -234,11 +252,10 @@ func (r *receiver) terminate() error {
 		}
 		return fmt.Errorf("dallying termination failed")
 	}
-	err := r.conn.sendTo(r.send[:4], r.addr)
-	if err != nil {
-		return err
+	if r.connected {
+		return r.conn.send(r.send[:4])
 	}
-	return nil
+	return r.conn.sendTo(r.send[:4], r.addr)
 }
 
 func (r *receiver) buildTransferStats() TransferStats {
@@ -268,9 +285,8 @@ func (r *receiver) abort(err error) error {
 		r.hook.OnFailure(r.buildTransferStats(), err)
 	}
 	n := packERROR(r.send, 1, err.Error())
-	err = r.conn.sendTo(r.send[:n], r.addr)
-	if err != nil {
-		return err
+	if r.connected {
+		return r.conn.send(r.send[:n])
 	}
-	return nil
+	return r.conn.sendTo(r.send[:n], r.addr)
 }
