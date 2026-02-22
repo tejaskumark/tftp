@@ -247,7 +247,7 @@ func (s *Server) Serve(conn net.PacketConn) error {
 		select {
 		case <-s.cancel.Done():
 			// Stop server because Shutdown was called
-			return nil
+			return fmt.Errorf("server shutdown called")
 		default:
 			var err error
 			if s.conn4 != nil {
