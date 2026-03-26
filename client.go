@@ -72,6 +72,16 @@ func (c *Client) RequestTSize(s bool) {
 	c.tsize = s
 }
 
+// SetDSCP sets the DSCP value to use in the IP header of the UDP packets.
+func (c *Client) SetDSCP(dscp int) error {
+	if dscp >= 0 && dscp <= 63 {
+		c.dscp = dscp
+	} else {
+		return fmt.Errorf("Invalid DSCP value %d, must be between 0 and 63 inclusive", dscp)
+	}
+	return nil
+}
+
 // Client stores data about a single TFTP client
 type Client struct {
 	addr      *net.UDPAddr
@@ -81,23 +91,30 @@ type Client struct {
 	blksize   int
 	tsize     bool
 	localAddr *net.UDPAddr
+	dscp      int
 }
 
 // Send starts outgoing file transmission. It returns io.ReaderFrom or error.
 func (c Client) Send(filename string, mode string) (io.ReaderFrom, error) {
-	conn, err := net.ListenUDP("udp", c.localAddr)
-	if err != nil {
+	var connected bool
+	var conn connConnection
+	conn.osconn = &osConn{}
+	if err := conn.getUDPConn(&connected, c.localAddr, c.addr, c.dscp); err != nil {
 		return nil, err
 	}
+	// For client usage we need to set connected to false for all three OS type
+	// Windows/Mac/Linux as client socket is not connected to any specific remote address
+	connected = false
 	s := &sender{
-		send:    make([]byte, datagramLength),
-		receive: make([]byte, datagramLength),
-		conn:    &connConnection{conn: conn},
-		retry:   &backoff{handler: c.backoff},
-		timeout: c.timeout,
-		retries: c.retries,
-		addr:    c.addr,
-		mode:    mode,
+		send:      make([]byte, datagramLength),
+		receive:   make([]byte, datagramLength),
+		conn:      &conn,
+		retry:     &backoff{handler: c.backoff},
+		timeout:   c.timeout,
+		retries:   c.retries,
+		addr:      c.addr,
+		mode:      mode,
+		connected: connected,
 	}
 	if c.blksize != 0 {
 		s.opts = make(options)
@@ -115,24 +132,30 @@ func (c Client) Send(filename string, mode string) (io.ReaderFrom, error) {
 
 // Receive starts incoming file transmission. It returns io.WriterTo or error.
 func (c Client) Receive(filename string, mode string) (io.WriterTo, error) {
-	conn, err := net.ListenUDP("udp", c.localAddr)
-	if err != nil {
+	var connected bool
+	var conn connConnection
+	conn.osconn = &osConn{}
+	if err := conn.getUDPConn(&connected, c.localAddr, c.addr, c.dscp); err != nil {
 		return nil, err
 	}
+	// For client usage we need to set connected to false for all three OS type
+	// Windows/Mac/Linux as client socket is not connected to any specific remote address
+	connected = false
 	if c.timeout == 0 {
 		c.timeout = defaultTimeout
 	}
 	r := &receiver{
-		send:     make([]byte, datagramLength),
-		receive:  make([]byte, datagramLength),
-		conn:     &connConnection{conn: conn},
-		retry:    &backoff{handler: c.backoff},
-		timeout:  c.timeout,
-		retries:  c.retries,
-		addr:     c.addr,
-		autoTerm: true,
-		block:    1,
-		mode:     mode,
+		send:      make([]byte, datagramLength),
+		receive:   make([]byte, datagramLength),
+		conn:      &conn,
+		retry:     &backoff{handler: c.backoff},
+		timeout:   c.timeout,
+		retries:   c.retries,
+		addr:      c.addr,
+		autoTerm:  true,
+		block:     1,
+		mode:      mode,
+		connected: false,
 	}
 	if c.blksize != 0 || c.tsize {
 		r.opts = make(options)
