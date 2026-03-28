@@ -9,7 +9,10 @@ import (
 
 type osConn struct{}
 
-func (cc *connConnection) getUDPConn(_ *bool, localAddr, remoteAddr *net.UDPAddr, dscp int) error {
+func (cc *connConnection) getUDPConn(
+	_ *bool, localAddr, remoteAddr *net.UDPAddr,
+	dscp int, _ string,
+) error {
 	log.Printf("ListenUDP connection on %s with DSCP %d", localAddr.String(), dscp)
 	var conn *net.UDPConn
 	var err error

@@ -99,7 +99,7 @@ func (c Client) Send(filename string, mode string) (io.ReaderFrom, error) {
 	var connected bool
 	var conn connConnection
 	conn.osconn = &osConn{}
-	if err := conn.getUDPConn(&connected, c.localAddr, c.addr, c.dscp); err != nil {
+	if err := conn.getUDPConn(&connected, c.localAddr, c.addr, c.dscp, "client"); err != nil {
 		return nil, err
 	}
 	// For client usage we need to set connected to false for all three OS type
@@ -135,7 +135,7 @@ func (c Client) Receive(filename string, mode string) (io.WriterTo, error) {
 	var connected bool
 	var conn connConnection
 	conn.osconn = &osConn{}
-	if err := conn.getUDPConn(&connected, c.localAddr, c.addr, c.dscp); err != nil {
+	if err := conn.getUDPConn(&connected, c.localAddr, c.addr, c.dscp, "client"); err != nil {
 		return nil, err
 	}
 	// For client usage we need to set connected to false for all three OS type
@@ -155,7 +155,7 @@ func (c Client) Receive(filename string, mode string) (io.WriterTo, error) {
 		autoTerm:  true,
 		block:     1,
 		mode:      mode,
-		connected: false,
+		connected: connected,
 	}
 	if c.blksize != 0 || c.tsize {
 		r.opts = make(options)

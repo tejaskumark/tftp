@@ -405,7 +405,8 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 		} else {
 			var onc connConnection
 			onc.osconn = &osConn{}
-			if err := onc.getUDPConn(&wt.connected, listenAddr, remoteAddr, s.dscp); err != nil {
+			if err := onc.getUDPConn(&wt.connected, listenAddr, remoteAddr,
+				s.dscp, "server"); err != nil {
 				return err
 			}
 			wt.conn = &onc
@@ -464,7 +465,8 @@ func (s *Server) handlePacket(localAddr net.IP, remoteAddr *net.UDPAddr, buffer 
 		} else {
 			var onc connConnection
 			onc.osconn = &osConn{}
-			if err := onc.getUDPConn(&rf.connected, listenAddr, remoteAddr, s.dscp); err != nil {
+			if err := onc.getUDPConn(&rf.connected, listenAddr, remoteAddr,
+				s.dscp, "server"); err != nil {
 				return err
 			}
 			rf.conn = &onc

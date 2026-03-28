@@ -40,20 +40,34 @@ type clientVersion struct {
 }
 
 func (cc *connConnection) getUDPConn(connected *bool, localAddr,
-	remoteAddr *net.UDPAddr, dscp int,
+	remoteAddr *net.UDPAddr, dscp int, mode string,
 ) error {
-	log.Printf("DialUDP connection on %s with DSCP %d", localAddr.String(), dscp)
-	conn, err := net.DialUDP("udp", localAddr, remoteAddr)
-	if err != nil {
-		log.Printf("error while dialing UDP conn:%s", err)
-		return err
+	switch mode {
+	case "server":
+		log.Printf("DialUDP connection on %s with DSCP %d", localAddr.String(), dscp)
+		conn, err := net.DialUDP("udp", localAddr, remoteAddr)
+		if err != nil {
+			log.Printf("error while dialing UDP conn:%s", err)
+			return err
+		}
+		*connected = true
+		cc.conn = conn
+		cc.osconn = &osConn{}
+	case "client":
+		log.Printf("ListenUDP connection on %s with DSCP %d", localAddr.String(), dscp)
+		conn, err := net.ListenUDP("udp", localAddr)
+		if err != nil {
+			return err
+		}
+		cc.conn = conn
+		cc.osconn = &osConn{}
+		*connected = false
+	default:
+		return fmt.Errorf("invalid mode: %s for getUDPconn", mode)
 	}
-	*connected = true
-	cc.conn = conn
-	cc.osconn = &osConn{}
 
 	if dscp != 0 {
-		if err = cc.setDSCPOnConn(remoteAddr, dscp); err != nil {
+		if err := cc.setDSCPOnConn(remoteAddr, dscp); err != nil {
 			// we are trying to set DSCP on best effort basis, so even if some error while
 			// setting DSCP on connection we just log the error and return nil
 			log.Printf("Failed to set DSCP on addr:%s - %s", localAddr.String(), err)
