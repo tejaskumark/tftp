@@ -16,6 +16,7 @@ type osConn struct {
 	qosHandle    windows.Handle
 	socketHandle windows.Handle
 	flowId       uint32
+	dscpValue    int
 }
 
 const (
@@ -62,6 +63,7 @@ func (cc *connConnection) getUDPConn(connected *bool, localAddr,
 		cc.conn = conn
 		cc.osconn = &osConn{}
 		*connected = false
+		cc.osconn.dscpValue = dscp
 	default:
 		return fmt.Errorf("invalid mode: %s for getUDPconn", mode)
 	}
@@ -80,18 +82,19 @@ func (cc *connConnection) getUDPConn(connected *bool, localAddr,
 func (cc *connConnection) setDSCPOnConn(remoteAddr *net.UDPAddr, dscp int) error {
 	var operr error
 	uint32dscp := uint32(dscp)
-
+	var ok bool
 	rawConn, err := cc.conn.SyscallConn()
 	if err != nil {
 		return fmt.Errorf("failed to get raw connection: %w", err)
 	}
-
-	var version clientVersion
-	version.MajorVersion = 1
-	version.MinorVersion = 0
-	ok, err := winQoSCreateHandle(unsafe.Pointer(&version), &cc.osconn.qosHandle)
-	if !ok || err != nil {
-		return fmt.Errorf("critical error creating Qos handle:%s", err)
+	if cc.osconn.qosHandle == 0 {
+		var version clientVersion
+		version.MajorVersion = 1
+		version.MinorVersion = 0
+		ok, err := winQoSCreateHandle(unsafe.Pointer(&version), &cc.osconn.qosHandle)
+		if !ok || err != nil {
+			return fmt.Errorf("critical error creating Qos handle:%s", err)
+		}
 	}
 
 	var sockAddrPtr unsafe.Pointer
@@ -141,6 +144,8 @@ func (cc *connConnection) setDSCPOnConn(remoteAddr *net.UDPAddr, dscp int) error
 			operr = fmt.Errorf("[Remote:%s]Failed to set DSCP: %s",
 				remoteAddr.String(), err)
 			return
+		} else {
+			log.Printf("DSCP set to %d on flow %d", dscp, cc.osconn.flowId)
 		}
 	})
 	if ctrlErr != nil {
@@ -211,4 +216,48 @@ func (cc *connConnection) unsetDSCPValue() error {
 	winQoSRemoveSocketFromFlow(cc.osconn.qosHandle, cc.osconn.socketHandle, cc.osconn.flowId, 0)
 	winQoSCloseHandle(cc.osconn.qosHandle)
 	return nil
+}
+
+// reconnectSocketForNewTID closes the current socket and creates a new
+// connected socket to the new TID address. This is required on Windows
+// because QOSAddSocketToFlow requires either a connected socket OR
+// a destAddr parameter, and for updating flows we need to connect.
+func (cc *connConnection) reconnectSocketForNewTID(connected *bool, newRemoteAddr *net.UDPAddr,
+	dscp int,
+) error {
+	// Remove the old flow first
+	if cc.osconn.flowId != 0 {
+		if ok, err := winQoSRemoveSocketFromFlow(
+			cc.osconn.qosHandle,
+			cc.osconn.socketHandle,
+			cc.osconn.flowId,
+			0,
+		); !ok {
+			log.Printf("failed to remove socket from flow: %s", err)
+		} else {
+			log.Printf("Removed socket from flow: %d", cc.osconn.flowId)
+		}
+		cc.osconn.flowId = 0
+	}
+
+	// Get the local address before closing
+	localAddr := cc.conn.LocalAddr().(*net.UDPAddr)
+
+	// Close the old connection (this also cleans up old QoS flow)
+	if cc.conn != nil {
+		cc.conn.Close()
+	}
+
+	// Create a new CONNECTED socket using DialUDP
+	// This connects to the specific remote IP:Port (the new TID)
+	newConn, err := net.DialUDP("udp", localAddr, newRemoteAddr)
+	if err != nil {
+		return fmt.Errorf("failed to dial UDP to new TID %s: %w", newRemoteAddr.String(), err)
+	}
+	*connected = true
+	// Update the connection
+	cc.conn = newConn
+	// Re-apply DSCP with the connected socket
+	// Windows allows NULL destAddr when socket is connected
+	return cc.setDSCPOnConn(newRemoteAddr, dscp)
 }

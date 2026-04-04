@@ -7,7 +7,9 @@ import (
 	"syscall"
 )
 
-type osConn struct{}
+type osConn struct {
+	dscpValue int
+}
 
 func (cc *connConnection) getUDPConn(
 	_ *bool, localAddr, remoteAddr *net.UDPAddr,
@@ -28,6 +30,7 @@ func (cc *connConnection) getUDPConn(
 		}
 	}
 	cc.conn = conn
+	cc.osconn = &osConn{}
 	if dscp != 0 {
 		if err = cc.setDSCPOnConn(dscp); err != nil {
 			// we are trying to set DSCP on best effort basis, so even if some error while
@@ -77,5 +80,15 @@ func (cc *connConnection) setDSCPOnConn(dscp int) error {
 }
 
 func (c *connConnection) unsetDSCPValue() error {
+	return nil
+}
+
+// updateDSCPValue is a no-op on Linux because DSCP is set per socket
+// not per flow like Windows, so it applies to all remote addresses on the same socket
+func (cc *connConnection) reconnectSocketForNewTID(connected *bool, _ *net.UDPAddr,
+	_ int,
+) error {
+	// No action needed - macOS uses setsockopt which applies to all packets
+	*connected = false
 	return nil
 }

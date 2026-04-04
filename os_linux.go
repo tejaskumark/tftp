@@ -7,16 +7,20 @@ import (
 	"syscall"
 )
 
-type osConn struct{}
+type osConn struct {
+	dscpValue int
+}
 
-func (cc *connConnection) getUDPConn(_ *bool, localAddr, _ *net.UDPAddr, 
-	dscp int, _ string) error {
+func (cc *connConnection) getUDPConn(_ *bool, localAddr, _ *net.UDPAddr,
+	dscp int, _ string,
+) error {
 	log.Printf("ListenUDP connection on %s with DSCP %d", localAddr.String(), dscp)
 	conn, err := net.ListenUDP("udp", localAddr)
 	if err != nil {
 		return err
 	}
 	cc.conn = conn
+	cc.osconn = &osConn{}
 	if dscp != 0 {
 		if err = cc.setDSCPOnConn(dscp); err != nil {
 			// we are trying to set DSCP on best effort basis, so even if some error while
@@ -68,5 +72,15 @@ func (cc *connConnection) setDSCPOnConn(dscp int) error {
 }
 
 func (c *connConnection) unsetDSCPValue() error {
+	return nil
+}
+
+// updateDSCPValue is a no-op on Linux because DSCP is set per socket
+// not per flow like Windows, so it applies to all remote addresses on the same socket
+func (cc *connConnection) reconnectSocketForNewTID(connected *bool, _ *net.UDPAddr,
+	_ int,
+) error {
+	*connected = false
+	// No action needed - Linux uses setsockopt which applies to all packets
 	return nil
 }

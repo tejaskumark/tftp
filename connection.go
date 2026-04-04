@@ -31,6 +31,7 @@ type connection interface {
 	readFrom([]byte) (int, *net.UDPAddr, error)
 	setDeadline(time.Duration) error
 	close()
+	updateDSCPForNewAddr(*bool, *net.UDPAddr) error
 }
 
 type connConnection struct {
@@ -38,11 +39,20 @@ type connConnection struct {
 	osconn *osConn
 }
 
+func (c *connConnection) updateDSCPForNewAddr(connected *bool, addr *net.UDPAddr) error {
+	return c.reconnectSocketForNewTID(connected, addr, c.osconn.dscpValue)
+}
+
 type chanConnection struct {
 	server        *Server
 	channel       chan []byte
 	srcAddr, addr *net.UDPAddr
 	timeout       time.Duration
+}
+
+func (c *chanConnection) updateDSCPForNewAddr(connected *bool, addr *net.UDPAddr) error {
+	// No-op for channel-based connections
+	return nil
 }
 
 func (c *chanConnection) sendTo(data []byte, addr *net.UDPAddr) error {
@@ -123,10 +133,14 @@ func (c *connConnection) setDeadline(deadline time.Duration) error {
 }
 
 func (c *connConnection) close() {
-	if err := c.conn.Close(); err != nil {
-		log.Printf("Error closing connection: %v", err)
+	if c.conn != nil {
+		if err := c.conn.Close(); err != nil {
+			log.Printf("Error closing connection: %v", err)
+		}
 	}
-	if err := c.unsetDSCPValue(); err != nil {
-		log.Printf("Error unsetting DSCP value: %v", err)
+	if c.osconn != nil {
+		if err := c.unsetDSCPValue(); err != nil {
+			log.Printf("Error unsetting DSCP value: %v", err)
+		}
 	}
 }

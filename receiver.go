@@ -196,6 +196,16 @@ func (r *receiver) receiveDatagram(l int) (int, *net.UDPAddr, error) {
 		if err != nil {
 			return 0, addr, err
 		}
+		// Check if TID changed and update DSCP flow if needed (Windows)
+		if r.tid == 0 && addr.Port != r.addr.Port {
+			log.Printf("TID changed from %d to %d", r.addr.Port, addr.Port)
+			// First response from server with new TID port
+			if err := r.conn.updateDSCPForNewAddr(&r.connected, addr); err != nil {
+				log.Printf("Warning: Failed to update DSCP for new TID %s: %v",
+					addr.String(), err)
+				// Continue anyway - this is best-effort
+			}
+		}
 		r.tid = addr.Port
 		switch p := p.(type) {
 		case pDATA:

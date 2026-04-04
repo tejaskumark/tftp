@@ -38,7 +38,7 @@ func sendAInit(sA *senderAnticipate, ln uint, winSz uint) {
 		sA.sendslens[k] = 0
 	}
 	sA.winsz = ksz
-	//fmt.Printf("  Set packet buffer size %v\n", ln)
+	// fmt.Printf("  Set packet buffer size %v\n", ln)
 }
 
 // derived from ReadFrom()
@@ -168,6 +168,15 @@ func (s *sender) sendDatagramAnticipate() (*net.UDPAddr, error) {
 		if err != nil {
 			continue
 		}
+		// CRITICAL CHANGE FOR WINDOWS: When TID changes, reconnect the socket on Windows
+        if s.tid == 0 && addr.Port != s.addr.Port {
+                // On Windows, we need to reconnect the socket to the new TID
+                // because QOSAddSocketToFlow requires connected socket or destAddr
+                if err := s.conn.updateDSCPForNewAddr(&s.connected, addr); err != nil {
+                    log.Printf("Warning: Failed to reconnect for new TID %s: %v",
+                        addr.String(), err)
+                }
+        }
 		s.tid = addr.Port
 		switch p := p.(type) {
 		case pACK:
